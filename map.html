@@ -149,10 +149,8 @@
   var level = "0"
   var from_id = -1
   var from_obj = null
-  var from_marker = null
   var to_id = -1
   var to_obj = null
-  var to_marker = null
 
   class Node {
     constructor(val, priority) {
@@ -1055,10 +1053,7 @@
     if (message.data.type !== "eventsLists") {
       return;
     }
-    debugger;
-
     function loadLayers() {
-      debugger;
       try {
         map.removeLayer('clusters')
       } catch (e) {
