@@ -1033,6 +1033,25 @@
   });
 
   window.addEventListener('message', message => {
+    if (message.data.type === "resize") {
+      map.resize();
+      return;
+    }
+
+    if (message.data.type === "roomHighlight") {
+      console.log(message.data)
+      return;
+    }
+
+    if (message.data.type === "showMarker") {
+      if (message.data.place) {
+        new maplibregl.Marker()
+          .setLngLat([message.data.place.latitude, message.data.place.longitude])
+          .addTo(map);
+      }
+      return;
+    }
+
     if (message.data.type !== "eventsLists") {
       return;
     }
