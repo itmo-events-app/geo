@@ -1053,6 +1053,7 @@
     if (message.data.type !== "eventsLists") {
       return;
     }
+
     function loadLayers() {
       try {
         map.removeLayer('clusters')
@@ -1177,13 +1178,17 @@
             ? document.referrer
             : document.location.href
         ) + "events/" + id.toString();
+        const span = document.createElement("div")
+        const a = document.createElement("a")
+        a.href = url
+        a.textContent = title
+        span.appendChild(a)
+        span.appendChild(document.createTextNode(date))
+        span.appendChild(document.createElement("br"))
+        span.appendChild(document.createTextNode(`Аудитория: ${room}`))
         new maplibregl.Popup()
-          .setLngLat(coordinates) // todo escaping
-          .setHTML(`
-                <a href="${url}" target=”_blank”>${title}</a>${date}<br/>
-                Аудитория: ${room}
-                `
-          )
+          .setLngLat(coordinates)
+          .setHTML(span.outerHTML)
           .addTo(map);
       });
 
@@ -1502,33 +1507,49 @@
         while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
           fixed_coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
         }
-        let text = ""
-        if (SELECT_ONLY_AREAS) { // todo escaping
-          text = `<!--ID: ${id}<br/>*/-->
-                    Тип: ${translations[subclass] ?? subclass}<br/>
-                    Аудитория: ${ref}<br/>
-                    Название: ${name}<br/>
-                    Этаж: ${obj_level + 1} <br/>
-                    Адрес: ${address} <br/>
-<!--                    Широта: ${coordinates[0]}<br/>-->
-<!--                    Долгота: ${coordinates[1]}<br/>-->
-                    <button id="select_room_btn" value="${id}">Выбрать</button>
-                    `
+        const popupData = document.createElement("div");
+        if (SELECT_ONLY_AREAS) {
+          [
+            `Тип: ${translations[subclass] ?? subclass}`,
+            `Аудитория: ${ref}`,
+            `Название: ${name}`,
+            `Этаж: ${obj_level + 1}`,
+            `Адрес: ${address}`,
+          ].forEach(i => {
+            popupData.appendChild(document.createTextNode(i))
+            popupData.appendChild(document.createElement("br"))
+          })
+          let btn = document.createElement("button")
+          btn.id = "select_room_btn"
+          btn.value = id
+          btn.textContent = "Выбрать"
+          popupData.appendChild(btn)
         } else {
-          text = `<!--ID: ${id}<br/>*/-->
-                    Тип: ${translations[subclass] ?? subclass}<br/>
-                    Аудитория: ${ref}<br/>
-                    Название: ${name}<br/>
-                    Этаж: ${obj_level + 1} <br/>
-                    Адрес: ${address} <br/>
-<!--                    Широта: ${coordinates[0]}<br/>-->
-<!--                    Долгота: ${coordinates[1]}<br/>-->
-                    <button id="route_from_btn" value="${id}">Отсюда</button>
-                    <button id="route_to_btn" value="${id}">Сюда</button>`
+          [
+            `Тип: ${translations[subclass] ?? subclass}`,
+            `Аудитория: ${ref}`,
+            `Название: ${name}`,
+            `Этаж: ${obj_level + 1}`,
+            `Адрес: ${address}`
+          ].forEach(i => {
+            popupData.appendChild(document.createTextNode(i))
+            popupData.appendChild(document.createElement("br"))
+          })
+          let btn_from = document.createElement("button")
+          btn_from.id = "route_from_btn"
+          btn_from.value = id
+          btn_from.textContent = "Отсюда"
+          popupData.appendChild(btn_from)
+          popupData.appendChild(document.createTextNode("\xA0"))
+          let btn_to = document.createElement("button")
+          btn_to.id = "route_to_btn"
+          btn_to.value = id
+          btn_to.textContent = "Сюда"
+          popupData.appendChild(btn_to)
         }
         new maplibregl.Popup()
           .setLngLat(fixed_coordinates)
-          .setHTML(text)
+          .setHTML(popupData.outerHTML)
           .addTo(map);
         if (!SELECT_ONLY_AREAS) {
           document.getElementById("route_from_btn").onclick = (event) => {
