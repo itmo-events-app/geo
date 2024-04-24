@@ -6,13 +6,13 @@
 > замените trickyfoxy на ваш аккаунт в Docker HUB, если продолжаете разработку этого всего
 
 ```bash
-docker build . -t trickyfoxy/itmo_pracice_geo
+docker build . -t trickyfoxy/itmo_practice_geo
 ```
 
 ### Запуск
 
 ```bash
-docker run --rm -p 9999:80 trickyfoxy/itmo_pracice_geo
+docker run --rm -p 9999:80 trickyfoxy/itmo_practice_geo
 ```
 
 Если вы «счастливый» обладатель Apple Silicon:
@@ -21,7 +21,7 @@ docker run --rm -p 9999:80 trickyfoxy/itmo_pracice_geo
 
 ```bash
 docker buildx create --use
-docker buildx build --platform linux/amd64,linux/arm64 --push -t trickyfoxy/itmo_pracice_geo .
+docker buildx build --platform linux/amd64,linux/arm64 --push -t trickyfoxy/itmo_practice_geo .
 ```
 
 
