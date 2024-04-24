@@ -1,0 +1,1761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>itmo.map</title>
+  <meta charset='utf-8'>
+  <link rel="icon" href="data:,">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel='stylesheet' href='maplibre-gl@4.1.1/dist/maplibre-gl.css'/>
+  <script src="maplibre-gl@4.1.1/dist/maplibre-gl.js"></script>
+  <link rel="preload" href="transition.json" as="fetch"/>
+  <link rel="prefetch" href="transition273.json" as="fetch"/>
+  <link rel="preconnect" href="https://tile.openstreetmap.org"/>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+    }
+
+    html, body, #map {
+      height: 100%;
+    }
+  </style>
+  <style>
+    .filter-group {
+      font: 20px/20px 'Helvetica Neue', Arial, Helvetica, sans-serif;
+      font-weight: 600;
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      z-index: 1;
+      border-radius: 3px;
+      /*width: 120px;*/
+      color: #fff;
+    }
+
+    .filter-group input[type='radio']:first-child + label {
+      border-radius: 3px 3px 0 0;
+    }
+
+    .filter-group label:last-child {
+      border-radius: 0 0 3px 3px;
+      border: none;
+    }
+
+    .filter-group input[type='radio'] {
+      display: none;
+    }
+
+    .filter-group input[type='radio'] + label {
+      background-color: #3386c0;
+      display: block;
+      cursor: pointer;
+      padding: 10px;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.25);
+    }
+
+    .filter-group input[type='radio'] + label {
+      background-color: #3386c0;
+      text-transform: capitalize;
+    }
+
+    .filter-group input[type='radio'] + label:hover,
+    .filter-group input[type='radio']:checked + label {
+      background-color: #76b8e6;
+    }
+
+    .filter-group input[type='radio']:checked + label:before {
+      /*content: '';*/
+      /*margin-right: 5px;*/
+    }
+  </style>
+  <style>
+    #features {
+      position: absolute;
+      top: 0;
+      right: 0;
+      bottom: 0;
+      width: 25%;
+      overflow: auto;
+      background: rgba(255, 255, 255, 0.8);
+    }
+
+    /*#map canvas {*/
+    /*  cursor: crosshair;*/
+    /*}*/
+
+    a:hover {
+      cursor: pointer;
+    }
+  </style>
+  <style>
+    #info {
+      /*display: block;*/
+      position: absolute;
+      top: 20px;
+      left: 50%;
+      transform: translate(-50%);
+      width: 50%;
+      padding: 10px;
+      border: none;
+      border-radius: 3px;
+      font-size: 12px;
+      text-align: center;
+      color: #222;
+      background: #fff;
+    }
+
+    #route_from_btn, #route_to_btn, #select_room_btn {
+      cursor: pointer;
+      outline: 0;
+      display: inline-block;
+      font-weight: 400;
+      line-height: 1.5;
+      text-align: center;
+      background-color: transparent;
+      border: 1px solid transparent;
+      padding: 6px 12px;
+      font-size: 1rem;
+      border-radius: .25rem;
+      transition: color .15s ease-in-out, background-color .15s ease-in-out, border-color .15s ease-in-out, box-shadow .15s ease-in-out;
+      color: #0d6efd;
+      border-color: #0d6efd;
+
+      :hover {
+        color: #fff;
+        background-color: #0d6efd;
+        border-color: #0d6efd;
+      }
+
+    }
+  </style>
+</head>
+<body>
+<div id="map"></div>
+<input hidden="" id="area-filter" type="text" class="filter-group" autocomplete='off' placeholder="area_id"
+       style="color: black">
+<nav id="filter-group" class="filter-group"></nav>
+<pre id="features" hidden=""></pre>
+<pre id="info" hidden=""></pre>
+<script>
+  const DEBUG = window.location.search.includes("debug")
+  const SELECT_ONLY_AREAS = window.location.search.includes("select_only_areas")
+  const OFF_AREAS_POPUPS = window.location.search.includes("off_clickable")
+  if (DEBUG) {
+    document.getElementById("area-filter").hidden = false;
+    document.getElementById("features").hidden = false;
+    document.getElementById("info").hidden = false;
+  }
+  var level = "0"
+  var from_id = -1
+  var from_obj = null
+  var from_marker = null
+  var to_id = -1
+  var to_obj = null
+  var to_marker = null
+
+  class Node {
+    constructor(val, priority) {
+      this.val = val;
+      this.priority = priority;
+    }
+  }
+
+  class PriorityQueue {
+    constructor() {
+      this.values = [];
+    }
+
+    enqueue(val, priority) {
+      let newNode = new Node(val, priority);
+      this.values.push(newNode);
+      this.bubbleUp();
+    }
+
+    bubbleUp() {
+      let idx = this.values.length - 1;
+      const element = this.values[idx];
+      while (idx > 0) {
+        let parentIdx = Math.floor((idx - 1) / 2);
+        let parent = this.values[parentIdx];
+        if (element.priority >= parent.priority) break;
+        this.values[parentIdx] = element;
+        this.values[idx] = parent;
+        idx = parentIdx;
+      }
+    }
+
+    dequeue() {
+      const min = this.values[0];
+      const end = this.values.pop();
+      if (this.values.length > 0) {
+        this.values[0] = end;
+        this.sinkDown();
+      }
+      return min;
+    }
+
+    sinkDown() {
+      let idx = 0;
+      const length = this.values.length;
+      const element = this.values[0];
+      while (true) {
+        let leftChildIdx = 2 * idx + 1;
+        let rightChildIdx = 2 * idx + 2;
+        let leftChild, rightChild;
+        let swap = null;
+
+        if (leftChildIdx < length) {
+          leftChild = this.values[leftChildIdx];
+          if (leftChild.priority < element.priority) {
+            swap = leftChildIdx;
+          }
+        }
+        if (rightChildIdx < length) {
+          rightChild = this.values[rightChildIdx];
+          if (
+            (swap === null && rightChild.priority < element.priority) ||
+            (swap !== null && rightChild.priority < leftChild.priority)
+          ) {
+            swap = rightChildIdx;
+          }
+        }
+        if (swap === null) break;
+        this.values[idx] = this.values[swap];
+        this.values[swap] = element;
+        idx = swap;
+      }
+    }
+  }
+
+  class WeightedGraph {
+    constructor() {
+      this.adjacencyList = {};
+    }
+
+    addVertex(vertex) {
+      if (!this.adjacencyList[vertex]) this.adjacencyList[vertex] = [];
+    }
+
+    addEdge(vertex1, vertex2, weight) {
+      this.adjacencyList[vertex1].push({node: vertex2, weight});
+      this.adjacencyList[vertex2].push({node: vertex1, weight});
+    }
+
+    Dijkstra(start, finish) {
+      const nodes = new PriorityQueue();
+      const distances = {};
+      const previous = {};
+      let path = [];
+      let smallest;
+      for (let vertex in this.adjacencyList) {
+        if (vertex === start) {
+          distances[vertex] = 0;
+          nodes.enqueue(vertex, 0);
+        } else {
+          distances[vertex] = Infinity;
+          nodes.enqueue(vertex, Infinity);
+        }
+        previous[vertex] = null;
+      }
+      while (nodes.values.length) {
+        smallest = nodes.dequeue().val;
+        if (smallest === finish) {
+          while (previous[smallest]) {
+            path.push(smallest);
+            smallest = previous[smallest];
+          }
+          break;
+        }
+        if (smallest || distances[smallest] !== Infinity) {
+          for (let neighbor in this.adjacencyList[smallest]) {
+            let nextNode = this.adjacencyList[smallest][neighbor];
+            let candidate = distances[smallest] + nextNode.weight;
+            let nextNeighbor = nextNode.node;
+            if (candidate < distances[nextNeighbor]) {
+              distances[nextNeighbor] = candidate;
+              previous[nextNeighbor] = smallest;
+              nodes.enqueue(nextNeighbor, candidate);
+            }
+          }
+        }
+      }
+      return path.concat(smallest).reverse();
+    }
+  }
+
+
+  const meta = {
+    kronva: {
+      "building_id": 13,
+      "name": "Кронверкский проспект, 49",
+      // "version": "0.5.18",
+      "bounds": [30.30767, 59.9559901, 30.3110834, 59.9575302],
+      "center": [30.3095, 59.9567],
+      "levels": [4, 3, 2, 1, 0],
+      // "bearing": 160.0
+    },
+    lomo: {
+      "building_id": 273,
+      "name": "улица Ломоносова, 9",
+      // "version": "0.5.18",
+      "bounds": [30.3366429, 59.9258744, 30.3394456, 59.9274763],
+      "center": [30.3380443, 59.9266753],
+      "levels": [5, 4, 3, 2, 1, 0],
+      // "bearing": 216.0
+    }
+  }
+
+  const translations = {
+    "kronva": "Кроверкский пр., 49",
+    "lomo": "ул. Ломоносова, 9",
+    "building": "Корпус",
+    "buildings": "Корпуса",
+    "search": "Поиск",
+    "back": "Назад",
+    "cancel": "Отменить",
+    "fromHere": "Отсюда",
+    "toHere": "Сюда",
+    "from": "Откуда",
+    "to": "Куда",
+    "recent": "Недавнее",
+    "route": "Маршрут",
+    "select": "Выбрать",
+    "selectOnTheMap": "Выбрать на карте",
+    "viewOnTheMap": "Посмотреть на карте",
+    "recommendedRoute": "Рекомендуемый маршрут",
+    "acrossTheYard": "Через двор",
+    "fewerStairs": "Меньше лестниц",
+    "recommended": "Рекомендуемый",
+    "insideBuilding": "Внутри здания",
+    "shortRoute": "Короткий маршрут",
+    "quickRoute": "Быстрый маршрут",
+    "distance": "Протяженность: {} метров",
+    "stairsDown": "Спуск",
+    "stairsUp": "Подъем",
+    "outdoor": "Двор",
+    "level": "Этаж",
+    "library": "Библиотека",
+    "fitnessroom": "Фитнес-зал",
+    "lockerroom.female": "Женская раздевалка",
+    "lockerroom.male": "Мужская раздевалка",
+    "restroom.female": "Туалет женский",
+    "restroom.female": "Туалет женский",
+    "restroom.male": "Туалет мужской",
+    "restroom.male": "Туалет мужской",
+    "restroom.unisex": "Туалет",
+    "restroom.unisex": "Туалет",
+    "restroom.unisex": "Туалет",
+    "education": "Аудитория",
+    "auditory": "Аудитория",
+    "cloakroom": "Гардероб",
+    "coworking": "Коворкинг",
+    "healthcare": "Медкабинет",
+    "studentservices": "Студофис",
+    "conferenceroom": "Конференц-зал",
+    "office": "Офис",
+    "canteen": "Столовая",
+    "rooms": "Помещение",
+    "stairs": "Лестница",
+    "entrance": "Вход",
+    "atm": "Банкомат",
+    "museum": "Музей",
+    "drinking_water": "Питьевая вода",
+    "meetingroom": "Переговорная",
+    "officeNumber": "каб. ",
+    "roomNumber": "ауд. ",
+    "goToTheFloor": "Иди по {} этажу",
+    "toTheDestination": "до места назначения",
+    "toTheStairs": "до лестницы",
+    "toTheOutside": "до выхода на улицу",
+    "toTheEntrance": "до входа в здание",
+    "goUpTheStairs": "Поднимайся по лестнице до {} этажа",
+    "goDownTheStairs": "Спускайся по лестнице до {} этажа",
+    "walkOutside": "Иди по улице",
+    "continuingMovement": "Продолжай движение",
+    "onTheWay": "В путь",
+    "next": "Далее",
+    "finish": "Завершить",
+    "noRoute": "Мы не нашли нужный маршрут",
+    "findNothing": "Мы очень стрались, но ничего не нашли...",
+    "goToTheSecretRoom": "К сожалению, как пройти до Тайной комнаты\nмы пока не знаем",
+    "loading": "Загрузка",
+    "download": "Загрузить",
+    "upload": "Скачать",
+    "defer": "Отложить",
+    "mapUpdate": "Обновление карты",
+    "updateBuilding": "Для корпуса на {} доступно обновление (размер)",
+    "downloadCompleted": "Загрузка данных завершена. \nМы готовы к новым приключениям!",
+    "great": "Отлично",
+    "save": "Сохранить",
+    "success": "Успешно",
+    "ok": "Понятно",
+    "continue": "Продолжить",
+    "delete": "Удалить",
+    "okay": "Окей",
+    "good": "Хорошо",
+    "choose": "Выберите",
+    "addresses": "Адреса",
+    "chooseBuilding": "Выбери корпус",
+    "errorHappens": "Ошибочка вышла…",
+    "tryToRefresh": "Попробуй обновить страницу\nили вернись сюда позже"
+  }
+
+  let background_layers = [
+    {
+      "id": "bg",
+      "type": "background",
+      "paint": {"background-color": "rgba(230, 233, 235, 1)"}
+    },
+    {
+      'id': 'simple-tiles',
+      'type': 'raster',
+      'source': 'raster-tiles',
+      'paint': {
+        'raster-brightness-max': 0.65,
+      }
+    },
+    // {
+    //   'id': 'raster-tiles2',
+    //   'type': 'raster',
+    //   'source': 'raster-tiles2',
+    //   'paint': {
+    //     'raster-brightness-max': 0.75,
+    //   }
+    // },
+  ]
+  let routePointLayers = [
+    {
+      "id": "route_start_circle",
+      "type": "circle",
+      "source": "route",
+      "filter": [
+        "all",
+        [
+          "==",
+          "type",
+          "start-point"
+        ],
+        ["==", "visible", "true"],
+        ["==", "level", level]
+      ],
+      "paint": {
+        "circle-color": [
+          "match",
+          ["get", "state"],
+          "active",
+          "#1846C7",
+          "rgba(24, 70, 199, 0.25)"
+        ],
+        "circle-radius": 8,
+        "circle-stroke-color": [
+          "match",
+          ["get", "state"],
+          "active",
+          "#1846C7",
+          "rgba(24, 70, 199, 0.25)"
+        ],
+        "circle-stroke-width": 2.5
+      }
+    },
+    {
+      "id": "route_end_circle",
+      "type": "circle",
+      "source": "route",
+      "filter": [
+        "all",
+        [
+          "==",
+          "type",
+          "end-point"
+        ],
+        ["==", "visible", "true"],
+        ["==", "level", level]
+      ],
+      "paint": {
+        "circle-color": [
+          "match",
+          ["get", "state"],
+          "active",
+          "#1846C7",
+          "rgba(24, 70, 199, 0.25)"
+        ],
+        "circle-radius": 8,
+        "circle-stroke-color": [
+          "match",
+          ["get", "state"],
+          "active",
+          "#1846C7",
+          "rgba(24, 70, 199, 0.25)"
+        ],
+        "circle-stroke-width": 2.5
+      }
+    },
+    {
+      "id": "route_start_symbol",
+      "type": "symbol",
+      "source": "route",
+      "filter": [
+        "all",
+        [
+          "==",
+          "type",
+          "start-point"
+        ],
+        ["==", "visible", "true"]
+      ],
+      "layout": {
+        "text-field": "A",
+        "text-font": [
+          "SF Pro Text Semibold"
+        ],
+        "text-size": 12
+      },
+      "paint": {
+        "text-color": "#FFFFFF",
+        "text-halo-width": 2
+      }
+    },
+    {
+      "id": "route_end_symbol",
+      "type": "symbol",
+      "source": "route",
+      "filter": [
+        "all",
+        [
+          "==",
+          "type",
+          "end-point"
+        ],
+        ["==", "visible", "true"],
+        ["==", "level", level]
+      ],
+      "layout": {
+        "text-field": "Б",
+        "text-font": [
+          "SF Pro Text Semibold"
+        ],
+        "text-size": 12
+      },
+      "paint": {
+        "text-color": "#FFFFFF",
+        "text-halo-width": 2
+      }
+    }]
+  let layers = [
+    ...background_layers,
+    /*    {
+          "id": "footprint",
+          "type": "fill",
+          "source": "openmaptiles",
+          "source-layer": "footprint",
+          "layout": {"visibility": "visible"},
+          "paint": {
+            "fill-color": "rgb(215,210,210)",
+            "fill-outline-color": "rgba(0, 0, 0, 0)"
+          }
+        },*/
+    /*    {
+          "id": "outside_nature",
+          "type": "fill",
+          "source": "openmaptiles",
+          "source-layer": "decoration",
+          "filter": ["all", ["==", "level", level]],
+          "layout": {"visibility": "visible"},
+          "paint": {
+            "fill-color": "rgba(233, 247, 232, 1)",
+            "fill-outline-color": "rgba(0, 0, 0, 0)"
+          }
+        },*/
+    /*    {
+          "id": "outside_footway",
+          "type": "fill",
+          "source": "openmaptiles",
+          "source-layer": "area",
+          "filter": ["all", ["==", "class", "footway"], ["==", "level", level]],
+          "layout": {"visibility": "visible"},
+          "paint": {
+            "fill-color": "rgba(244, 244, 245, 1)",
+            "fill-outline-color": "rgba(0, 0, 0, 0)"
+          }
+        },*/
+    {
+      "id": "room",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "area",
+      "filter": ["all", ["==", "level", level], ["!=", "class", "footway"]],
+      "layout": {"visibility": "visible"},
+      "paint": {
+        "fill-color": "rgba(244, 244, 245, 1)",
+        "fill-outline-color": "rgba(0, 0, 0, 0)"
+      }
+    },
+    {
+      "id": "room_restroom",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "area",
+      "filter": [
+        "all",
+        [
+          "in",
+          "subclass",
+          "restroom.male",
+          "restroom.female",
+          "restroom.unisex",
+          "restroom"
+        ],
+        ["==", "level", level]
+      ],
+      "paint": {
+        "fill-color": "rgba(246, 229, 255, 1)",
+        "fill-outline-color": "rgba(0, 0, 0, 0)"
+      },
+    },
+    {
+      "id": "room_student_places",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "area",
+      "filter": [
+        "all",
+        ["in", "subclass", "coworking", "studentservices", "library", "canteen", "food"],
+        ["==", "level", level]
+      ],
+      "paint": {
+        "fill-color": "rgba(255, 240, 229, 1)",
+        "fill-outline-color": "rgba(0, 0, 0, 0)"
+      }
+    },
+    {
+      "id": "room_services",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "area",
+      "filter": [
+        "all",
+        ["in", "subclass", "healthcare", "cloakroom", "cashdesk"],
+        ["==", "level", level]
+      ],
+      "paint": {
+        "fill-color": "rgba(229, 244, 255, 1)",
+        "fill-outline-color": "rgba(0, 0, 0, 0)"
+      }
+    },
+    {
+      "id": "room_halls",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "area",
+      "filter": [
+        "all",
+        ["in", "subclass", "museum", "conferenceroom"],
+        ["==", "level", level]
+      ],
+      "paint": {
+        "fill-color": "rgba(255, 248, 229, 1)",
+        "fill-outline-color": "rgba(0, 0, 0, 0)"
+      }
+    },
+    {
+      "id": "room_sport",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "area",
+      "filter": [
+        "all",
+        [
+          "in",
+          "subclass",
+          "fitnessroom",
+          "lockerroom.female",
+          "lockerroom.male"
+        ],
+        ["==", "level", level]
+      ],
+      "paint": {
+        "fill-color": "rgba(255, 229, 230, 1)",
+        "fill-outline-color": "rgba(0, 0, 0, 0)"
+      }
+    },
+    {
+      "id": "walkway",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "area",
+      "filter": [
+        "all",
+        [
+          "in",
+          "subclass",
+          "walkway",
+          "lobby",
+          "stairs",
+          "entrance",
+          "corridor"
+        ],
+        ["!=", "outdoor", "true"],
+        ["==", "level", level]
+      ],
+      "layout": {"visibility": "visible"},
+      "paint": {
+        "fill-color": "rgba(255, 255, 255, 1)", // коридоры
+        "fill-outline-color": "rgba(0, 0, 0, 0)"
+      }
+    },
+    {
+      "id": "stairs",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "area",
+      "filter": ["all", ["in", "subclass", "stairs"], ["==", "level", level]],
+      "paint": {
+        "fill-color": "rgba(255, 255, 255, 1)",
+        "fill-outline-color": "rgba(0, 0, 0, 0)"
+      }
+    },
+    {
+      "id": "borders",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "walls",
+      "minzoom": 15,
+      // "maxzoom": 19,
+      "filter": ["all", ["==", "level", level]],
+      "paint": {
+        "fill-color": "rgba(183, 196, 204, 1)"
+      }
+    },
+    /*    {
+          "id": "borders3d",
+          "type": "fill-extrusion",
+          "source": "openmaptiles",
+          "source-layer": "walls",
+          "minzoom": 19,
+          // "filter": ["all", ["==", "level",  level]],
+          "layout": {"visibility": "visible"},
+          "paint": {
+            "fill-extrusion-color": "rgba(183, 196, 204, 1)",
+            "fill-extrusion-height":
+              // [
+              // "interpolate",
+              // ["linear"],
+              // ["zoom"],
+              // 19,
+              // 0,
+              // 19.05,
+              // 1
+            1,
+            "fill-extrusion-base": ["*", ["number", ["get", "level"]], 5],
+            // "fill-extrusion-base": 1,
+            "fill-extrusion-opacity": 0.8
+          }
+        },*/
+    {
+      "id": "poi",
+      "type": "symbol",
+      "source": "openmaptiles",
+      "source-layer": "poi",
+      "filter": ["all", ["==", "level", level]],
+      "minzoom": 19,
+      "layout": {
+        "text-size": {
+          "base": 1.2,
+          "stops": [[17, 10], [20, 12]]
+        },
+        "text-field": "{name}",
+        "visibility": "visible",
+        "text-max-width": 6,
+        "text-font": [
+          "SF Pro Text Semibold"
+        ],
+        "symbol-placement": "point",
+        "symbol-avoid-edges": false,
+        "icon-allow-overlap": false,
+        "text-ignore-placement": false,
+        "text-anchor": "top",
+        "text-offset": [0, 1],
+        "icon-text-fit": "none",
+        "icon-anchor": "center",
+        "icon-keep-upright": false,
+        "text-optional": true,
+        // "icon-image": "{subclass}",
+        "icon-image": [
+          "match",
+          ["get", "subclass"],
+          "atm",
+          "cash",
+          "drinking_water",
+          "water",
+          "default"
+        ],
+        "icon-size": 0.4
+      },
+      "paint": {
+        "text-color": "rgba(96, 96, 96, 1)",
+        "text-halo-blur": 0,
+        "text-halo-color": "hsla(0, 0%, 100%, 0.75)",
+        "text-halo-width": 2
+      }
+    },
+    {
+      "id": "area_name_auditory",
+      "type": "symbol",
+      "source": "openmaptiles",
+      "source-layer": "area_name",
+      "maxzoom": 22,
+      "filter": [
+        "all",
+        [
+          "!in",
+          "subclass",
+          "corridor",
+          "stairs",
+          "entrance",
+          "restroom",
+          "restroom.female",
+          "restroom.male",
+          "restroom.unisex",
+          "canteen",
+          "cloakroom",
+          "coworking",
+          "healthcare",
+          "conferenceroom",
+          "fitnessroom",
+          "library",
+          "lockerroom.female",
+          "lockerroom.male",
+          "studentservices",
+          "museum"
+        ],
+        ["==", "level", level],
+        ["!=", "id", "-1"]
+      ],
+      "layout": {
+        "text-size": {
+          "base": 1.2,
+          "stops": [[17, 10], [20, 12]]
+        },
+        "text-field": "{name}",
+        "visibility": "visible",
+        "text-max-width": 6,
+        "text-font": [
+          "SF Pro Text Semibold"
+        ],
+        "symbol-placement": "point",
+        "symbol-avoid-edges": false,
+        "icon-allow-overlap": false,
+        "text-ignore-placement": false,
+        "text-anchor": "center",
+        "icon-text-fit": "none",
+        "icon-anchor": "center",
+        "icon-keep-upright": false,
+        "text-optional": true,
+        "icon-size": 0.4,
+        "text-offset": [0, 0]
+      },
+      "paint": {
+        "text-color": "rgba(96, 96, 96, 1)",
+        "text-halo-blur": 0,
+        "text-halo-color": "hsla(0, 0%, 100%, 0.75)",
+        "text-halo-width": 2,
+        "icon-color": "#000000"
+      }
+    },
+    {
+      "id": "area_filter",
+      "type": "fill",
+      "source": "openmaptiles",
+      "source-layer": "area",
+      "minzoom": 15,
+      "filter": ["any", ["==", "isu:room_id", -42]],
+      "paint": {
+        "fill-color": "rgb(246,82,82)"
+      }
+    },
+    {
+      "id": "area_name_active",
+      "type": "symbol",
+      "source": "openmaptiles",
+      "source-layer": "area_name",
+      "minzoom": 18,
+      "maxzoom": 22,
+      "filter": [
+        "all",
+        ["==", "level", level],
+        ["!=", "subclass", "office"],
+        ["!=", "subclass", "corridor"],
+        ["!=", "subclass", "entrance"]
+      ],
+      "layout": {
+        "text-size": {
+          "base": 1.2,
+          "stops": [[17, 10], [20, 12]]
+        },
+        "text-field": "{name}",
+        "visibility": "visible",
+        "text-max-width": 6,
+        "text-font": [
+          "SF Pro Text Semibold"
+        ],
+        "symbol-placement": "point",
+        "symbol-avoid-edges": false,
+        "icon-allow-overlap": false,
+        "text-ignore-placement": false,
+        "text-anchor": "top",
+        "icon-text-fit": "none",
+        "icon-anchor": "bottom",
+        "icon-keep-upright": false,
+        "text-optional": true,
+        "icon-image": "{subclass}",
+        "icon-size": 0.4
+      },
+      "paint": {
+        "text-color": "rgba(96, 96, 96, 1)",
+        "text-halo-blur": 0,
+        "text-halo-color": "hsla(0, 0%, 100%, 0.75)",
+        "text-halo-width": 2,
+        "icon-color": "#000000"
+      }
+    },
+    {
+      "id": "area_name_active_important",
+      "type": "symbol",
+      "source": "openmaptiles",
+      "source-layer": "area_name",
+      "minzoom": 16,
+      "maxzoom": 22,
+      "filter": [
+        "all",
+        ["==", "level", level],
+        ["!=", "subclass", "office"],
+        ["!=", "subclass", "corridor"],
+        ["==", "subclass", "entrance"]
+      ],
+      "layout": {
+        "text-size": {
+          "base": 1.2,
+          "stops": [[17, 10], [20, 12]]
+        },
+        "text-field": "{name}",
+        "visibility": "visible",
+        "text-max-width": 6,
+        "text-font": [
+          "SF Pro Text Semibold"
+        ],
+        "symbol-placement": "point",
+        "symbol-avoid-edges": false,
+        "icon-allow-overlap": false,
+        "text-ignore-placement": false,
+        "text-anchor": "top",
+        "icon-text-fit": "none",
+        "icon-anchor": "bottom",
+        "icon-keep-upright": false,
+        "text-optional": true,
+        "icon-image": "{subclass}",
+        "icon-size": 0.4
+      },
+      "paint": {
+        "text-color": "rgba(96, 96, 96, 1)",
+        "text-halo-blur": 0,
+        "text-halo-color": "hsla(0, 0%, 100%, 0.75)",
+        "text-halo-width": 2,
+        "icon-color": "#000000"
+      }
+    },
+    ...routePointLayers
+  ]
+  let style = {
+    'id': 'raster',
+    'version': 8,
+    'name': 'Raster tiles',
+    'center': [0, 0],
+    'zoom': 0,
+    'sources': {
+      'raster-tiles': {
+        'type': 'raster',
+        'tiles': [
+          location.href.includes("localhost")
+            ? 'http://localhost:8082/{z}/{x}/{y}.png'
+            : 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'
+          // 'http://tile2.maps.2gis.com/tiles?x={x}&y={y}&z={z}'
+        ],
+        'tileSize': 256,
+        'minzoom': 0,
+        'maxzoom': 19
+      },
+      // 'raster-tiles2': {
+      //   'type': 'raster',
+      //   'tiles': [
+      //     'https://api.maptiler.com/maps/basic-v2/{z}/{x}/{y}@2x.png?key=Pnye9dTgQJwfzE98TtDy'
+      //   ],
+      //   'minzoom': 0,
+      //   'maxzoom': 19
+      // },
+      "openmaptiles": {
+        "type": "vector",
+        // "tiles": ["http://localhost:9872/365db088921dc424e055571fbf9bdc5b/tiles/{z}/{x}/{y}.pbf"]
+        "tiles": [
+          location.href.replace(/map.html\\??.*/, "mbtiles.php?db=13.mbtiles&z={z}&x={x}&y={y}"),
+        ]
+      },
+      "route": {
+        "type": "geojson",
+        "data": {
+          'type': 'FeatureCollection',
+          'features': []
+        }
+      }
+    },
+    // "sprite": "http://localhost:8080/fb/html/practice/sprites/sprites",
+    "glyphs": location.href.replace(/map.html\\??.*/, "glyphs/{fontstack}/{range}.pbf"),
+    "layers": layers,
+  }
+  var map = new maplibregl.Map({
+    container: 'map',
+    style: style,
+    zoom: 16,
+    center: meta.kronva.center,
+    // center: meta.lomo.center,
+    bounds: meta.kronva.bounds,
+    // bounds: meta.lomo.bounds,
+    antialias: true,
+    dragRotate: false,
+    // touchZoomRotate: false,
+    touchPitch: false,
+    attributionControl: false,
+    cooperativeGestures: window.location.search.includes("noscroll"),
+    locale: {
+      'CooperativeGesturesHandler.WindowsHelpText': 'Зажмите ctrl и проскролльте, чтобы приблизить',
+      'CooperativeGesturesHandler.MacHelpText': 'Зажмите ⌘ и проскролльте, чтобы приблизить',
+    }
+  });
+
+  window.addEventListener('message', message => {
+    if (message.data.type !== "eventsLists") {
+      return;
+    }
+    debugger;
+
+    function loadLayers() {
+      debugger;
+      try {
+        map.removeLayer('clusters')
+      } catch (e) {
+      }
+      try {
+        map.removeLayer('cluster-count')
+      } catch (e) {
+      }
+      try {
+        map.removeLayer('unclustered-point')
+      } catch (e) {
+      }
+      try {
+        map.removeSource('events')
+      } catch (e) {
+      }
+      map.addSource('events', {
+        type: 'geojson',
+        // data: 'https://maplibre.org/maplibre-gl-js/docs/assets/earthquakes.geojson',
+        data: {
+          'type': 'FeatureCollection',
+          'features': message.data.events.map(({event: event, place: place}) => {
+            return {
+              'type': 'Feature',
+              'properties': {
+                'title': event.title,
+                'id': event.id,
+                'place_name': place.name,
+                'address': place.address,
+                'room': place.room,
+                'start_date': event.startDate,
+              },
+              'geometry': {
+                'type': 'Point',
+                'coordinates': [
+                  parseFloat(place.latitude),
+                  parseFloat(place.longitude),
+                ]
+              }
+            }
+          })
+        },
+        cluster: true,
+        clusterMaxZoom: 20, // Max zoom to cluster points on
+        clusterRadius: 50 // Radius of each cluster when clustering points (defaults to 50)
+      });
+      map.addLayer({
+        id: 'clusters',
+        type: 'circle',
+        source: 'events',
+        filter: ['has', 'point_count'],
+        paint: {
+          'circle-color': [
+            'step',
+            ['get', 'point_count'],
+            '#51bbd6',
+            100,
+            '#f1f075',
+            750,
+            '#f28cb1'
+          ],
+          'circle-radius': [
+            'step',
+            ['get', 'point_count'],
+            20,
+            100,
+            30,
+            750,
+            40
+          ]
+        }
+      });
+      map.addLayer({
+        id: 'cluster-count',
+        type: 'symbol',
+        source: 'events',
+        filter: ['has', 'point_count'],
+        layout: {
+          'text-field': '{point_count_abbreviated}',
+          'text-size': 12
+        }
+      });
+      map.addLayer({
+        id: 'unclustered-point',
+        type: 'circle',
+        source: 'events',
+        filter: ['!', ['has', 'point_count']],
+        paint: {
+          'circle-color': '#51bbd6',
+          'circle-radius': 10,
+          'circle-stroke-width': 1,
+          'circle-stroke-color': '#fff'
+        }
+      });
+
+      map.on('click', 'clusters', async (e) => {
+        const features = map.queryRenderedFeatures(e.point, {
+          layers: ['clusters']
+        });
+        const clusterId = features[0].properties.cluster_id;
+        const zoom = await map.getSource('events').getClusterExpansionZoom(clusterId);
+        map.easeTo({
+          center: features[0].geometry.coordinates,
+          zoom
+        });
+      });
+      map.on('click', 'unclustered-point', (e) => {
+        const coordinates = e.features[0].geometry.coordinates.slice();
+        while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
+          coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
+        }
+        const title = e.features[0].properties.title;
+        const id = e.features[0].properties.id;
+        const place_name = e.features[0].properties.name;
+        const address = e.features[0].properties.address;
+        const room = e.features[0].properties.room;
+        const date = e.features[0].properties.start_date
+          ? " — " + (new Date(Date.parse(e.features[0].properties.start_date)).toLocaleDateString())
+          : ""
+        const url = ((window.location != window.parent.location)
+            ? document.referrer
+            : document.location.href
+        ) + "events/" + id.toString();
+        new maplibregl.Popup()
+          .setLngLat(coordinates) // todo escaping
+          .setHTML(`
+                <a href="${url}" target=”_blank”>${title}</a>${date}<br/>
+                Аудитория: ${room}
+                `
+          )
+          .addTo(map);
+      });
+
+      map.on('mouseenter', 'clusters', () => {
+        map.getCanvas().style.cursor = 'pointer';
+      });
+      map.on('mouseleave', 'clusters', () => {
+        map.getCanvas().style.cursor = '';
+      });
+    }
+
+    if (!map.isStyleLoaded()) {
+      map.on('style.load', () => {
+        const waiting = () => {
+          if (!map.isStyleLoaded()) {
+            setTimeout(waiting, 1000);
+          } else {
+            loadLayers();
+          }
+        };
+        setTimeout(() => {
+          waiting()
+        }, Math.random() * 500); // bypass frontend double messages
+      });
+    } else {
+      loadLayers();
+    }
+  })
+  if (window.location.search.includes("fullscreen")) {
+    map.addControl(new maplibregl.FullscreenControl(), 'top-left');
+  }
+  // map.addControl(new maplibregl.AttributionControl({customAttribution: "© ITMO.MAP © OSM"}));
+  map.on('load', async () => {
+      if (DEBUG) {
+        const image = await map.loadImage('https://upload.wikimedia.org/wikipedia/commons/7/7c/201408_cat.png');
+        map.addImage('cat', image.data);
+      }
+      const filterGroup = document.getElementById('filter-group');
+      ["0", "1", "2", "3", "4"].toReversed().forEach((level_i) => {
+        let layerID = "level_" + level_i
+        const input = document.createElement('input');
+        input.type = 'radio';
+        input.id = layerID;
+        input.value = level_i
+        input.name = "level"
+        input.checked = level_i === "0";
+        filterGroup.appendChild(input);
+
+        const label = document.createElement('label');
+        label.title = 'Переключить этаж'
+        label.setAttribute('for', layerID);
+        label.textContent = parseInt(level_i) + 1;
+        filterGroup.appendChild(label);
+
+        const levelSwitch = (e) => {
+          layers.slice(background_layers.length).forEach((l) => {
+            level = e.target.value
+            map.removeLayer(l.id)
+            let newL = l;
+            if (!('filter' in newL)) {
+              map.addLayer(l)
+              return
+            }
+            newL['filter'].slice(1).forEach((f, index) => {
+              if (f[1] === "level") {
+                newL['filter'][index + 1][2] = e.target.value
+              }
+            })
+            map.addLayer(newL)
+          })
+        };
+        input.addEventListener('change', levelSwitch);
+      })
+      const screenshot = document.createElement('a');
+      screenshot.title = "Сделать скриншот"
+      screenshot.textContent = "📸"
+      screenshot.style = "font-size: 29px"
+      screenshot.onclick = () => {
+        map.once("render", function () {
+          let a = document.createElement("a");
+          a.href = document.querySelector("canvas").toDataURL();
+          a.download = `screen_${parseInt(level) + 1}`;
+          document.body.appendChild(a);
+          a.click();
+          setTimeout(() => {
+            document.body.removeChild(a);
+          }, 0);
+        });
+        map.setBearing(map.getBearing());
+      }
+      filterGroup.appendChild(screenshot)
+      const areaFinder = (e) => {
+        layers.slice(background_layers.length).forEach((l) => {
+          if (l.id !== "area_filter") return;
+          map.removeLayer(l.id)
+          let newL = l;
+          newL['filter'] = ["all", ["==", "id", e.target.value]]
+          map.addLayer(newL)
+        })
+      }
+      document.getElementById("area-filter").addEventListener('input', areaFinder);
+
+      let icons = [
+        "accelerator",
+        "restroom",
+        "restroom.female",
+        "restroom.male",
+        "restroom.unisex",
+        "restroom.wheelchair",
+        "water",
+        "auditory",
+        "canteen",
+        "cash",
+        "cloakroom",
+        "conferenceroom",
+        "coworking",
+        "default",
+        "elevator",
+        "entrance",
+        "gym",
+        "healthcare",
+        "laboratory",
+        "library",
+        "lockerroom.female",
+        "lockerroom.male",
+        "meetingroom",
+        "museum",
+        "office",
+        "office.study",
+        "parking.bike",
+        "pc",
+        "printer",
+        "science",
+        "serviceroom",
+        "stairs.down",
+        "stairs",
+        "stairs.up",
+        "studoffice",
+        "walkway",
+        "yard",
+      ]
+      let promisedIcons = []
+      for (const name of icons) {
+        promisedIcons.push([name, map.loadImage(location.href.replace(/map.html\\??.*/, "sprites/" + name + ".png"))])
+      }
+      for (const [name, promise] of promisedIcons) {
+        map.addImage(name, (await promise).data);
+      }
+
+      if (!OFF_AREAS_POPUPS) {
+        map.on('mouseenter', 'area_name_auditory', () => {
+          map.getCanvas().style.cursor = 'pointer';
+        });
+        map.on('mouseleave', 'area_name_auditory', () => {
+          map.getCanvas().style.cursor = '';
+        });
+        map.on('mouseenter', 'area_name_active', (e) => {
+          if (e.features[0].properties.subclass === "education") {
+            map.getCanvas().style.cursor = 'pointer';
+          }
+        });
+        map.on('mouseleave', 'area_name_active', () => {
+          map.getCanvas().style.cursor = '';
+        });
+        map.on('mouseenter', 'area_name_active_important', () => {
+          map.getCanvas().style.cursor = 'pointer';
+        });
+        map.on('mouseleave', 'area_name_active_important', () => {
+          map.getCanvas().style.cursor = '';
+        });
+        if (!SELECT_ONLY_AREAS) {
+          map.on('poi', 'area_name_active_important', () => {
+            map.getCanvas().style.cursor = 'pointer';
+          });
+          map.on('poi', 'area_name_active_important', () => {
+            map.getCanvas().style.cursor = '';
+          });
+        }
+      }
+      let pointInsideBBox = (p, bbox) => {
+        return bbox[0] < p[0] && p[0] < bbox[2]
+          && bbox[1] < p[1] && p[1] < bbox[3]
+      }
+
+      function makeRoute(from_id, from_obj, to_id, to_obj) {
+        console.log(from_id, from_obj, to_id, to_obj)
+
+        function findNearbyGraphNode(area_obj) {
+          function dist(p1, p2) {
+            function degreesToRadians(degrees) {
+              return degrees * Math.PI / 180;
+            }
+
+            function distanceInKmBetweenEarthCoordinates(lat1, lon1, lat2, lon2) {
+              const earthRadiusKm = 6371;
+
+              const dLat = degreesToRadians(lat2 - lat1);
+              const dLon = degreesToRadians(lon2 - lon1);
+
+              lat1 = degreesToRadians(lat1);
+              lat2 = degreesToRadians(lat2);
+
+              const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
+              const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+              return earthRadiusKm * c;
+            }
+
+            // return distanceInKmBetweenEarthCoordinates(p1[0], p1[1], p2[0], p2[1])
+            return (p1[0] - p2[0]) ** 2 + (p1[1] - p2[1]) ** 2
+          }
+
+          return transitions.features.reduce((mn, cur) => {
+            if (cur.properties.area_id.toString() !== area_obj.properties.id) return mn
+            if (dist(cur.geometry.coordinates, area_obj.geometry.coordinates.slice(0, 2))
+              < dist(mn.geometry.coordinates, area_obj.geometry.coordinates.slice(0, 2))) {
+              return cur
+            }
+            return mn
+          }, transitions.features[0]).properties.id.toString();
+        }
+
+        const from_node = findNearbyGraphNode(from_obj)
+        const to_node = findNearbyGraphNode(to_obj)
+        let route = Dgraph.Dijkstra(from_node, to_node);
+        let routeLinks = {
+          'type': 'FeatureCollection',
+          'features': []
+        }
+        for (let i = 0; i < route.length - 1; i++) {
+          let from = graph[route[i]].slice(0, 2)
+          let level = graph[route[i]].at(2)
+          let to = graph[route[i + 1]].slice(0, 2)
+          routeLinks.features.push({
+            'type': 'Feature',
+            'properties': {
+              'color': "#1846C7",
+              'level': level.toString()
+            },
+            'geometry': {
+              'type': 'LineString',
+              'coordinates': [
+                from,
+                to,
+              ]
+            }
+          })
+        }
+
+        try {
+          map.removeLayer("route_end_symbol")
+        } catch (e) {
+        }
+        try {
+          map.removeLayer("route_start_symbol")
+        } catch (e) {
+        }
+        try {
+          map.removeLayer("route_end_circle")
+        } catch (e) {
+        }
+        try {
+          map.removeLayer("route_start_circle")
+        } catch (e) {
+        }
+        try {
+          map.removeLayer('routeLines')
+          map.removeSource('routeLines')
+        } catch (e) {
+        }
+        map.addSource('routeLines', {
+          'type': 'geojson',
+          'data': routeLinks
+        });
+
+        const routeLines = {
+          'id': 'routeLines',
+          'type': 'line',
+          'source': 'routeLines',
+          'paint': {
+            'line-width': 3,
+            'line-color': ['get', 'color']
+          },
+          filter: [
+            "all",
+            ["==", "level", level]
+          ]
+        }
+        layers.push(routeLines) // fixme
+        map.addLayer(routeLines);
+        routePointLayers.forEach((i) => {
+          map.addLayer(i)
+        })
+        map.removeLayer('routeS')
+      }
+
+      let click_handler = (e) => {
+        var ee = e.features
+        const coordinates = e.features[0].geometry.coordinates.slice();
+        const id = e.features[0].properties["id"];
+        const name = e.features[0].properties["name"];
+        const subclass = e.features[0].properties["subclass"];
+        const ref = e.features[0].properties["ref"];
+        const obj_level = parseInt(e.features[0].properties["level"]);
+        let address = ""
+        if (pointInsideBBox(coordinates, meta.kronva.bounds)) {
+          address = meta.kronva.name
+        } else if (pointInsideBBox(coordinates, meta.lomo.bounds)) {
+          address = meta.lomo.name
+        } else {
+          address = ""
+          // fetch(`https://nominatim.openstreetmap.org/reverse.php?lat=${lat}&lon=${lon}&format=jsonv2`)
+        }
+
+        let fixed_coordinates = coordinates
+        while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
+          fixed_coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
+        }
+        let text = ""
+        if (SELECT_ONLY_AREAS) { // todo escaping
+          text = `<!--ID: ${id}<br/>*/-->
+                    Тип: ${translations[subclass] ?? subclass}<br/>
+                    Аудитория: ${ref}<br/>
+                    Название: ${name}<br/>
+                    Этаж: ${obj_level + 1} <br/>
+                    Адрес: ${address} <br/>
+<!--                    Широта: ${coordinates[0]}<br/>-->
+<!--                    Долгота: ${coordinates[1]}<br/>-->
+                    <button id="select_room_btn" value="${id}">Выбрать</button>
+                    `
+        } else {
+          text = `<!--ID: ${id}<br/>*/-->
+                    Тип: ${translations[subclass] ?? subclass}<br/>
+                    Аудитория: ${ref}<br/>
+                    Название: ${name}<br/>
+                    Этаж: ${obj_level + 1} <br/>
+                    Адрес: ${address} <br/>
+<!--                    Широта: ${coordinates[0]}<br/>-->
+<!--                    Долгота: ${coordinates[1]}<br/>-->
+                    <button id="route_from_btn" value="${id}">Отсюда</button>
+                    <button id="route_to_btn" value="${id}">Сюда</button>`
+        }
+        new maplibregl.Popup()
+          .setLngLat(fixed_coordinates)
+          .setHTML(text)
+          .addTo(map);
+        if (!SELECT_ONLY_AREAS) {
+          document.getElementById("route_from_btn").onclick = (event) => {
+            from_id = event.target.value
+            from_obj = ee[0]
+            let f = [{
+              'type': 'Feature',
+              'geometry': {
+                'type': 'Point',
+                'coordinates': ee[0].geometry.coordinates
+              },
+              "properties": {
+                "type": "start-point",
+                "visible": "true",
+                "state": "active",
+                "level": ee[0].properties.level.toString()
+              }
+            }]
+            if (to_obj) {
+              f.push({
+                'type': 'Feature',
+                'geometry': {
+                  'type': 'Point',
+                  'coordinates': to_obj.geometry.coordinates
+                },
+                "properties": {
+                  "type": "end-point",
+                  "visible": "true",
+                  "state": "active",
+                  "level": to_obj.properties.level.toString()
+                }
+              })
+            }
+            map.getSource("route").setData({
+              'type': 'FeatureCollection',
+              'features': f
+            })
+            if (to_id !== -1) {
+              makeRoute(parseInt(from_id), from_obj, parseInt(to_id), to_obj);
+            }
+            event.target.parentElement.querySelector(".maplibregl-popup-close-button").click();
+          }
+          document.getElementById("route_to_btn").onclick = (event) => {
+            to_id = event.target.value
+            to_obj = ee[0]
+            let f = [{
+              'type': 'Feature',
+              'geometry': {
+                'type': 'Point',
+                'coordinates': ee[0].geometry.coordinates
+              },
+              "properties": {
+                "type": "end-point",
+                "visible": "true",
+                "state": "active",
+                "level": ee[0].properties.level.toString()
+              }
+            }]
+            if (from_obj) {
+              f.push({
+                'type': 'Feature',
+                'geometry': {
+                  'type': 'Point',
+                  'coordinates': from_obj.geometry.coordinates
+                },
+                "properties": {
+                  "type": "start-point",
+                  "visible": "true",
+                  "state": "active",
+                  "level": from_obj.properties.level.toString()
+                }
+              })
+            }
+            map.getSource("route").setData({
+              'type': 'FeatureCollection',
+              'features': f
+            })
+            if (from_id !== -1) {
+              makeRoute(parseInt(from_id), from_obj, parseInt(to_id), to_obj);
+            }
+            event.target.parentElement.querySelector(".maplibregl-popup-close-button").click();
+          }
+        } else {
+          document.getElementById("select_room_btn").onclick = (event) => {
+            window.parent.postMessage({
+              coordinates: ee[0].geometry.coordinates,
+              properties: ee[0].properties,
+              address: address
+            }, "*");
+            event.target.parentElement.querySelector(".maplibregl-popup-close-button").click();
+          }
+        }
+      }
+
+      if (!OFF_AREAS_POPUPS) {
+        map.on('click', 'area_name_active', click_handler);
+        if (!SELECT_ONLY_AREAS) map.on('click', 'area_name_active_important', click_handler);
+        map.on('click', 'area_name_auditory', click_handler);
+        if (!SELECT_ONLY_AREAS) map.on('click', 'poi', click_handler);
+      }
+
+      const transitions = await (await fetch(location.href.replace(/map.html\\??.*/, 'transition.json'))).json();
+      const transitions_lomo = await (await fetch(location.href.replace(/map.html\\??.*/, 'transition273.json'))).json();
+
+      transitions.features = transitions.features.concat(transitions_lomo.features.map((item) => {
+        let new_item = item
+        new_item.properties.id += 10000
+        new_item.properties.transitions = new_item.properties.transitions.map((t) => {
+          let new_t = t
+          new_t.id += 10000
+          return new_t
+        })
+        return new_item
+      }))
+
+
+      let links = {
+        'type': 'FeatureCollection',
+        'features': []
+      }
+      let graph = {}
+      transitions.features.forEach((item) => {
+        graph[item.properties.id] = item.geometry.coordinates.concat(item.properties.area_id);
+      })
+      const Dgraph = new WeightedGraph();
+      for (let i in graph) {
+        Dgraph.addVertex(i)
+      }
+
+      const levelsColors = {
+        "-1": '#bc45f7',
+        "0": '#F7455D',
+        "1": '#45adf7',
+        "2": '#45f748',
+        "3": '#f7bf45',
+        "4": '#456ff7'
+      }
+      transitions.features.forEach((item) => {
+        item.properties.transitions.forEach((e) => {
+          links.features.push({
+            'type': 'Feature',
+            'properties': {
+              'color': levelsColors[item.properties.level.toString()],
+              'level': item.properties.level.toString()
+            },
+            'geometry': {
+              'type': 'LineString',
+              'coordinates': [
+                [graph[item.properties.id][0], graph[item.properties.id][1]],
+                [graph[e.id][0], graph[e.id][1]],
+              ]
+            }
+          })
+          Dgraph.addEdge(item.properties.id.toString(), e.id.toString(), e.distance * e.weight)
+        })
+      })
+      map.addSource('lines', {
+        'type': 'geojson',
+        'data': links
+      });
+      if (DEBUG) {
+        map.addSource('floorplan', {
+          'type': 'geojson',
+          'data': transitions
+        });
+
+        map.addLayer({
+          'id': 'floorplan',
+          'source': 'floorplan',
+          'type': 'symbol',
+          'layout': {
+            'icon-image': 'cat',
+            // get the year from the source's "year" property
+            'text-field': ['get', 'id'],
+            // 'text-offset': [0, 1.25],
+            'text-anchor': 'top',
+            'icon-size': 0.1,
+          },
+          "filter": ["all",
+            ["==", "level", 0],
+            //   // ["==", "area_id", 145]
+          ]
+        });
+
+        const lines = {
+          'id': 'lines',
+          'type': 'line',
+          'source': 'lines',
+          'paint': {
+            'line-width': 3,
+            'line-color': ['get', 'color']
+          },
+          filter: [
+            "all",
+            ["==", "level", level]
+          ]
+        }
+        layers.push(lines)
+        map.addLayer(lines);
+
+        map.on('mousemove', (e) => {
+          document.getElementById('info').innerHTML =
+            // e.point is the x, y coordinates of the mousemove event relative
+            // to the top-left corner of the map
+            `${JSON.stringify(e.point)
+            }<br />${
+              // e.lngLat is the longitude, latitude geographical position of the event
+              JSON.stringify(e.lngLat.wrap())}`;
+
+          const features = map.queryRenderedFeatures(e.point);
+
+          // Limit the number of properties we're displaying for
+          // legibility and performance
+          const displayProperties = [
+            'type',
+            'properties',
+            'id',
+            'layer',
+            'source',
+            'sourceLayer',
+            'state'
+          ];
+
+          const displayFeatures = features.map((feat) => {
+            const displayFeat = {};
+            displayProperties.forEach((prop) => {
+              displayFeat[prop] = feat[prop];
+            });
+            return displayFeat;
+          });
+
+          document.getElementById('features').innerHTML = JSON.stringify(
+            displayFeatures,
+            null,
+            2
+          );
+        });
+      }
+    }
+  )
+  ;
+</script>
+</body>
+</html>
