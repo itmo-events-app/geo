@@ -1590,7 +1590,7 @@
             if (to_id !== -1) {
               makeRoute(parseInt(from_id), from_obj, parseInt(to_id), to_obj);
             }
-            event.target.parentElement.querySelector(".maplibregl-popup-close-button").click();
+            event.target.parentElement.parentElement.querySelector(".maplibregl-popup-close-button").click();
           }
           document.getElementById("route_to_btn").onclick = (event) => {
             to_id = event.target.value
@@ -1630,7 +1630,7 @@
             if (from_id !== -1) {
               makeRoute(parseInt(from_id), from_obj, parseInt(to_id), to_obj);
             }
-            event.target.parentElement.querySelector(".maplibregl-popup-close-button").click();
+            event.target.parentElement.parentElement.querySelector(".maplibregl-popup-close-button").click();
           }
         } else {
           document.getElementById("select_room_btn").onclick = (event) => {
@@ -1639,7 +1639,7 @@
               properties: ee[0].properties,
               address: address
             }, "*");
-            event.target.parentElement.querySelector(".maplibregl-popup-close-button").click();
+            event.target.parentElement.parentElement.querySelector(".maplibregl-popup-close-button").click();
           }
         }
       }
