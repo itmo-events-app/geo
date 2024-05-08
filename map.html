@@ -105,7 +105,7 @@
       background: #fff;
     }
 
-    #route_from_btn, #route_to_btn, #select_room_btn {
+    #route_from_btn, #route_to_btn, #select_room_btn, #select_point_btn {
       cursor: pointer;
       outline: 0;
       display: inline-block;
@@ -1010,6 +1010,46 @@
     "glyphs": location.href.replace(/map.html\\??.*/, "glyphs/{fontstack}/{range}.pbf"),
     "layers": layers,
   }
+  const icons = [
+    "accelerator",
+    "restroom",
+    "restroom.female",
+    "restroom.male",
+    "restroom.unisex",
+    "restroom.wheelchair",
+    "water",
+    "auditory",
+    "canteen",
+    "cash",
+    "cloakroom",
+    "conferenceroom",
+    "coworking",
+    "default",
+    "elevator",
+    "entrance",
+    "gym",
+    "healthcare",
+    "laboratory",
+    "library",
+    "lockerroom.female",
+    "lockerroom.male",
+    "meetingroom",
+    "museum",
+    "office",
+    "office.study",
+    "parking.bike",
+    "pc",
+    "printer",
+    "science",
+    "serviceroom",
+    "stairs.down",
+    "stairs",
+    "stairs.up",
+    "studoffice",
+    "walkway",
+    "yard",
+  ]
+
   var map = new maplibregl.Map({
     container: 'map',
     style: style,
@@ -1030,6 +1070,11 @@
     }
   });
 
+  function pointInsideBBox(p, bbox) {
+    return bbox[0] < p[0] && p[0] < bbox[2]
+      && bbox[1] < p[1] && p[1] < bbox[3]
+  }
+
   window.addEventListener('message', message => {
     if (message.data.type === "resize") {
       map.resize();
@@ -1046,6 +1091,14 @@
         new maplibregl.Marker()
           .setLngLat([message.data.place.latitude, message.data.place.longitude])
           .addTo(map);
+        const p = [message.data.place.latitude, message.data.place.longitude]
+        if (pointInsideBBox(p, meta.kronva.bounds)) {
+          map.fitBounds(meta.kronva.bounds, {duration: 0})
+        } else if (pointInsideBBox(p, meta.lomo.bounds)) {
+          map.fitBounds(meta.lomo.bounds, {duration: 0})
+        } else {
+          map.setCenter(p)
+        }
       }
       return;
     }
@@ -1292,45 +1345,6 @@
       }
       document.getElementById("area-filter").addEventListener('input', areaFinder);
 
-      let icons = [
-        "accelerator",
-        "restroom",
-        "restroom.female",
-        "restroom.male",
-        "restroom.unisex",
-        "restroom.wheelchair",
-        "water",
-        "auditory",
-        "canteen",
-        "cash",
-        "cloakroom",
-        "conferenceroom",
-        "coworking",
-        "default",
-        "elevator",
-        "entrance",
-        "gym",
-        "healthcare",
-        "laboratory",
-        "library",
-        "lockerroom.female",
-        "lockerroom.male",
-        "meetingroom",
-        "museum",
-        "office",
-        "office.study",
-        "parking.bike",
-        "pc",
-        "printer",
-        "science",
-        "serviceroom",
-        "stairs.down",
-        "stairs",
-        "stairs.up",
-        "studoffice",
-        "walkway",
-        "yard",
-      ]
       let promisedIcons = []
       for (const name of icons) {
         promisedIcons.push([name, map.loadImage(location.href.replace(/map.html\\??.*/, "sprites/" + name + ".png"))])
@@ -1368,10 +1382,6 @@
             map.getCanvas().style.cursor = '';
           });
         }
-      }
-      let pointInsideBBox = (p, bbox) => {
-        return bbox[0] < p[0] && p[0] < bbox[2]
-          && bbox[1] < p[1] && p[1] < bbox[3]
       }
 
       function makeRoute(from_id, from_obj, to_id, to_obj) {
@@ -1650,6 +1660,60 @@
         if (!SELECT_ONLY_AREAS) map.on('click', 'area_name_active_important', click_handler);
         map.on('click', 'area_name_auditory', click_handler);
         if (!SELECT_ONLY_AREAS) map.on('click', 'poi', click_handler);
+        map.on('click', (e) => {
+          if (!SELECT_ONLY_AREAS) return
+          const coordinates = [e.lngLat.lng, e.lngLat.lat]
+          const address_span = document.createElement("span")
+          address_span.id = "address_span"
+          address_span.textContent = " "
+          if (!map.queryRenderedFeatures(e.point).every(i => ["area, area_name", "area_name_active_important", "poi"].includes(i.sourceLayer))) {
+            return
+          }
+          if (pointInsideBBox(coordinates, meta.kronva.bounds)) {
+            address_span.textContent = meta.kronva.name
+          } else if (pointInsideBBox(coordinates, meta.lomo.bounds)) {
+            address_span.textContent = meta.lomo.name
+          } else {
+            fetch(`https://nominatim.openstreetmap.org/reverse.php?lon=${coordinates[0]}&lat=${coordinates[1]}&format=jsonv2`).then((res) => {
+              res.json().then((r) => {
+                if (r?.address?.road && r?.address?.house_number) {
+                  document.getElementById("address_span").textContent = r?.address?.road + ", " + r?.address?.house_number ?? ""
+                } else if (r?.address?.road) {
+                  document.getElementById("address_span").textContent = r?.address?.road
+                } else {
+                  document.getElementById("address_span").textContent = r?.address?.house_number
+                }
+              }).catch(() => {
+                document.getElementById("address_span").textContent = "Не удалось определить адрес"
+              })
+            }).catch(() => {
+              document.getElementById("address_span").textContent = "Не удалось определить адрес"
+            })
+          }
+          let fixed_coordinates = coordinates
+          while (Math.abs(e.lngLat.lng - coordinates[0]) > 180) {
+            fixed_coordinates[0] += e.lngLat.lng > coordinates[0] ? 360 : -360;
+          }
+          let popupData = document.createElement("div")
+          popupData.appendChild(address_span)
+          popupData.appendChild(document.createElement("br"))
+          let btn = document.createElement("button")
+          btn.id = "select_point_btn"
+          btn.textContent = "Выбрать"
+          popupData.appendChild(btn)
+          new maplibregl.Popup()
+            .setLngLat(fixed_coordinates)
+            .setHTML(popupData.outerHTML)
+            .addTo(map);
+          document.getElementById("select_point_btn").onclick = (event) => {
+            window.parent.postMessage({
+              coordinates: coordinates,
+              properties: {},
+              address: document.getElementById("address_span").textContent
+            }, "*");
+            event.target.parentElement.parentElement.querySelector(".maplibregl-popup-close-button").click();
+          }
+        })
       }
 
       const transitions = await (await fetch(location.href.replace(/map.html\\??.*/, 'transition.json'))).json();
