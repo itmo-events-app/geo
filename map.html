@@ -131,12 +131,13 @@
   </style>
 </head>
 <body>
-<div id="map"></div>
-<input hidden="" id="area-filter" type="text" class="filter-group" autocomplete='off' placeholder="area_id"
-       style="color: black">
-<nav id="filter-group" class="filter-group"></nav>
-<pre id="features" hidden=""></pre>
-<pre id="info" hidden=""></pre>
+<div id="map">
+  <input hidden="" id="area-filter" type="text" class="filter-group" autocomplete='off' placeholder="area_id"
+         style="color: black">
+  <nav id="filter-group" class="filter-group"></nav>
+  <pre id="features" hidden=""></pre>
+  <pre id="info" hidden=""></pre>
+</div>
 <script>
   const DEBUG = window.location.search.includes("debug")
   const SELECT_ONLY_AREAS = window.location.search.includes("select_only_areas")
@@ -423,6 +424,23 @@
     // },
   ]
   let routePointLayers = [
+    {
+      'id': 'routeLines',
+      'type': 'line',
+      'source': 'routeLines',
+      'paint': {
+        'line-width': 3,
+        'line-color': ['get', 'color']
+      },
+      'layout': {
+        'line-join': 'round',
+        'line-cap': 'round'
+      },
+      filter: [
+        "all",
+        ["==", "level", level]
+      ]
+    },
     {
       "id": "route_start_circle",
       "type": "circle",
@@ -1004,6 +1022,13 @@
           'type': 'FeatureCollection',
           'features': []
         }
+      },
+      "routeLines": {
+        'type': 'geojson',
+        'data': {
+          'type': 'FeatureCollection',
+          'features': []
+        }
       }
     },
     // "sprite": "http://localhost:8080/fb/html/practice/sprites/sprites",
@@ -1050,13 +1075,30 @@
     "yard",
   ]
 
+  const showMarker = new URLSearchParams(window.location.search).get("show_marker")
+  let placeMarker = null
+  let LAT = new URLSearchParams(window.location.search).get("lat")
+  let LON = new URLSearchParams(window.location.search).get("lon")
+  let bounds = meta.kronva.bounds
+  if (LAT && LON) {
+    if (pointInsideBBox([parseFloat(LAT), parseFloat(LON)], meta.kronva.bounds)) {
+      [LAT, LON] = meta.kronva.center
+      bounds = meta.kronva.bounds
+    } else if (pointInsideBBox([parseFloat(LAT), parseFloat(LON)], meta.lomo.bounds)) {
+      [LAT, LON] = meta.lomo.center
+      bounds = meta.lomo.bounds
+    } else {
+      [LAT, LON] = [parseFloat(LAT), parseFloat(LON)]
+      bounds = null
+    }
+  }
   var map = new maplibregl.Map({
     container: 'map',
     style: style,
     zoom: 16,
-    center: meta.kronva.center,
+    center: [LAT, LON],
     // center: meta.lomo.center,
-    bounds: meta.kronva.bounds,
+    bounds: bounds,
     // bounds: meta.lomo.bounds,
     antialias: true,
     dragRotate: false,
@@ -1227,7 +1269,7 @@
         const date = e.features[0].properties.start_date
           ? " — " + (new Date(Date.parse(e.features[0].properties.start_date)).toLocaleDateString())
           : ""
-        const url = ((window.location != window.parent.location)
+        const url = ((window.location !== window.parent.location)
             ? document.referrer
             : document.location.href
         ) + "events/" + id.toString();
@@ -1276,6 +1318,11 @@
   }
   // map.addControl(new maplibregl.AttributionControl({customAttribution: "© ITMO.MAP © OSM"}));
   map.on('load', async () => {
+      if (showMarker !== null) {
+        placeMarker = new maplibregl.Marker()
+          .setLngLat([LAT, LON])
+          .addTo(map);
+      }
       if (DEBUG) {
         const image = await map.loadImage('https://upload.wikimedia.org/wikipedia/commons/7/7c/201408_cat.png');
         map.addImage('cat', image.data);
@@ -1295,17 +1342,19 @@
         label.title = 'Переключить этаж'
         label.setAttribute('for', layerID);
         label.textContent = parseInt(level_i) + 1;
+        label.style.textAlign = "center"
         filterGroup.appendChild(label);
 
         const levelSwitch = (e) => {
+          console.log(layers)
           layers.slice(background_layers.length).forEach((l) => {
             level = e.target.value
             map.removeLayer(l.id)
-            let newL = l;
-            if (!('filter' in newL)) {
+            if (!('filter' in l)) {
               map.addLayer(l)
               return
             }
+            let newL = l;
             newL['filter'].slice(1).forEach((f, index) => {
               if (f[1] === "level") {
                 newL['filter'][index + 1][2] = e.target.value
@@ -1313,13 +1362,15 @@
             })
             map.addLayer(newL)
           })
+          console.log(layers)
         };
         input.addEventListener('change', levelSwitch);
       })
       const screenshot = document.createElement('a');
       screenshot.title = "Сделать скриншот"
       screenshot.textContent = "📸"
-      screenshot.style = "font-size: 29px"
+      screenshot.style.fontSize = "29px"
+      screenshot.style.textAlign = "center"
       screenshot.onclick = () => {
         map.once("render", function () {
           let a = document.createElement("a");
@@ -1334,17 +1385,18 @@
         map.setBearing(map.getBearing());
       }
       filterGroup.appendChild(screenshot)
-      const areaFinder = (e) => {
-        layers.slice(background_layers.length).forEach((l) => {
-          if (l.id !== "area_filter") return;
-          map.removeLayer(l.id)
-          let newL = l;
-          newL['filter'] = ["all", ["==", "id", e.target.value]]
-          map.addLayer(newL)
-        })
+      if (DEBUG) {
+        const areaFinder = (e) => {
+          layers.slice(background_layers.length).forEach((l) => {
+            if (l.id !== "area_filter") return;
+            map.removeLayer(l.id)
+            let newL = l;
+            newL['filter'] = ["all", ["==", "id", e.target.value]]
+            map.addLayer(newL)
+          })
+        }
+        document.getElementById("area-filter").addEventListener('input', areaFinder);
       }
-      document.getElementById("area-filter").addEventListener('input', areaFinder);
-
       let promisedIcons = []
       for (const name of icons) {
         promisedIcons.push([name, map.loadImage(location.href.replace(/map.html\\??.*/, "sprites/" + name + ".png"))])
@@ -1385,7 +1437,7 @@
       }
 
       function makeRoute(from_id, from_obj, to_id, to_obj) {
-        console.log(from_id, from_obj, to_id, to_obj)
+        console.debug(from_id, from_obj, to_id, to_obj)
 
         function findNearbyGraphNode(area_obj) {
           function dist(p1, p2) {
@@ -1448,7 +1500,12 @@
             }
           })
         }
-
+        if (route.length > 1) {
+          routeLinks.features[0].geometry.coordinates[0] = from_obj.geometry.coordinates
+          routeLinks.features[routeLinks.features.length - 1].geometry.coordinates[1] = to_obj.geometry.coordinates
+        } else {
+          alert("Между выбранными точками нет маршрута :(")
+        }
         try {
           map.removeLayer("route_end_symbol")
         } catch (e) {
@@ -1467,6 +1524,9 @@
         }
         try {
           map.removeLayer('routeLines')
+        } catch (e) {
+        }
+        try {
           map.removeSource('routeLines')
         } catch (e) {
         }
@@ -1483,17 +1543,29 @@
             'line-width': 3,
             'line-color': ['get', 'color']
           },
+          'layout': {
+            'line-join': 'round',
+            'line-cap': 'round'
+          },
           filter: [
             "all",
             ["==", "level", level]
           ]
         }
-        layers.push(routeLines) // fixme
-        map.addLayer(routeLines);
+        layers.forEach((value, index) => {
+          if (value.id === "routeLines") {
+            layers[index] = routeLines
+            routePointLayers[0] = routeLines
+          }
+        })
         routePointLayers.forEach((i) => {
+          i['filter'].slice(1).forEach((f, index) => {
+            if (f[1] === "level") {
+              i['filter'][index + 1][2] = level
+            }
+          })
           map.addLayer(i)
         })
-        map.removeLayer('routeS')
       }
 
       let click_handler = (e) => {
@@ -1511,7 +1583,6 @@
           address = meta.lomo.name
         } else {
           address = ""
-          // fetch(`https://nominatim.openstreetmap.org/reverse.php?lat=${lat}&lon=${lon}&format=jsonv2`)
         }
 
         let fixed_coordinates = coordinates
@@ -1651,6 +1722,10 @@
               address: address
             }, "*");
             event.target.parentElement.parentElement.querySelector(".maplibregl-popup-close-button").click();
+            placeMarker?.remove()
+            placeMarker = new maplibregl.Marker()
+              .setLngLat(ee[0].geometry.coordinates)
+              .addTo(map);
           }
         }
       }
@@ -1712,6 +1787,10 @@
               address: document.getElementById("address_span").textContent
             }, "*");
             event.target.parentElement.parentElement.querySelector(".maplibregl-popup-close-button").click();
+            placeMarker?.remove()
+            placeMarker = new maplibregl.Marker()
+              .setLngLat(coordinates)
+              .addTo(map);
           }
         })
       }
@@ -1731,10 +1810,6 @@
       }))
 
 
-      let links = {
-        'type': 'FeatureCollection',
-        'features': []
-      }
       let graph = {}
       transitions.features.forEach((item) => {
         graph[item.properties.id] = item.geometry.coordinates.concat(item.properties.area_id);
@@ -1744,6 +1819,10 @@
         Dgraph.addVertex(i)
       }
 
+      let links = {
+        'type': 'FeatureCollection',
+        'features': []
+      }
       const levelsColors = {
         "-1": '#bc45f7',
         "0": '#F7455D',
@@ -1754,28 +1833,30 @@
       }
       transitions.features.forEach((item) => {
         item.properties.transitions.forEach((e) => {
-          links.features.push({
-            'type': 'Feature',
-            'properties': {
-              'color': levelsColors[item.properties.level.toString()],
-              'level': item.properties.level.toString()
-            },
-            'geometry': {
-              'type': 'LineString',
-              'coordinates': [
-                [graph[item.properties.id][0], graph[item.properties.id][1]],
-                [graph[e.id][0], graph[e.id][1]],
-              ]
-            }
-          })
+          if (DEBUG) {
+            links.features.push({
+              'type': 'Feature',
+              'properties': {
+                'color': levelsColors[item.properties.level.toString()],
+                'level': item.properties.level.toString()
+              },
+              'geometry': {
+                'type': 'LineString',
+                'coordinates': [
+                  [graph[item.properties.id][0], graph[item.properties.id][1]],
+                  [graph[e.id][0], graph[e.id][1]],
+                ]
+              }
+            })
+          }
           Dgraph.addEdge(item.properties.id.toString(), e.id.toString(), e.distance * e.weight)
         })
       })
-      map.addSource('lines', {
-        'type': 'geojson',
-        'data': links
-      });
       if (DEBUG) {
+        map.addSource('lines', {
+          'type': 'geojson',
+          'data': links
+        });
         map.addSource('floorplan', {
           'type': 'geojson',
           'data': transitions
